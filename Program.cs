@@ -1,11 +1,13 @@
-﻿using System.Net;
-using System.Net.Mail;
+﻿using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 
 namespace UDPProbe;
     
 class Program
 {
+    
+
     static int Main(string[] args)
     {
         var opts = Options.GetOpts(args);
@@ -13,18 +15,32 @@ class Program
         {
             return 4;
         }
-        int receivesPerPort = 2;
-        int receives = opts.Ports.Count * receivesPerPort;
-        CountdownEvent cde = new CountdownEvent(receives);
 
-        var tasks = SetupReceives(
-              cde
+        bool runForever = opts.IPs.Count == 0 || opts.SendForever;
+        int receivesPerPort;
+        if (runForever)
+        {
+            receivesPerPort = 3;
+        }
+        else
+        {
+            receivesPerPort = 1;
+        }
+
+        int receives = opts.Ports.Count * receivesPerPort;
+        CountdownEvent allReceivesListening = new CountdownEvent(receives);
+
+        var replies = new ConcurrentDictionary<IPAddress, List<int>>();
+
+        var receiveTasks = SetupReceives(
+              allReceivesListening
             , opts.Ports
             , echoReply:  opts.IPs.Count == 0
-            , runForever: opts.IPs.Count == 0 || opts.SendForever
-            , receivesPerPort);
+            , runForever
+            , receivesPerPort
+            , replies);
 
-        if ( ! cde.Wait(millisecondsTimeout: 3000) )
+        if ( ! allReceivesListening.Wait(millisecondsTimeout: 3000) )
         {
             Console.Error.WriteLine("could not setup listening on all ports");
         }
@@ -38,20 +54,22 @@ class Program
             Send(opts.IPs, opts.Ports, opts.SendForever);
         }
         
-        Task.WaitAll(tasks);
+        Task.WaitAll(receiveTasks);
+
+        PrintReplies(replies, opts.Ports);
 
         return 0;
     }
-    public static Task[] SetupReceives(CountdownEvent cde, List<int> ports, bool echoReply, bool runForever, int receivesPerPort)
+    public static Task[] SetupReceives(CountdownEvent cde, List<int> ports, bool echoReply, bool runForever, int receivesPerPort, ConcurrentDictionary<IPAddress, List<int>> replies)
     {
         return 
             ports.SelectMany( port =>
                 Enumerable
                     .Repeat(port, receivesPerPort)
-                    .Select(p => Receive(cde, p, echoReply, runForever))
+                    .Select(p => Receive(cde, p, echoReply, runForever, replies))
             ).ToArray();
     }
-    public static async Task Receive(CountdownEvent cde, int port, bool echoReply, bool runForever)
+    public static async Task Receive(CountdownEvent cde, int port, bool echoReply, bool runForever, ConcurrentDictionary<IPAddress, List<int>> replies)
     {
         try
         {
@@ -65,10 +83,14 @@ class Program
             Console.WriteLine($"listening on port {port}");
             cde.Signal();
 
-            for (; ; )
+            for (;;)
             {
                 var receiveResult = await receiveTask;
                 string recvMsg = $"received from {receiveResult.RemoteEndPoint}";
+                replies.AddOrUpdate(
+                      key: receiveResult.RemoteEndPoint.Address
+                    , addValue: new List<int>() { port }
+                    , updateValueFactory: (ip, ports) => { ports.Add(port); return ports; } );
 
                 if (echoReply)
                 {
@@ -109,7 +131,7 @@ class Program
                 foreach ( var port in ports )
                 {
                     var remote = new IPEndPoint(IP,port);
-                    int sentBytes = socket.Send(buffer, buffer.Length, remote );
+                    int sentBytes = socket.Send(buffer, buffer.Length, remote);
                     Console.WriteLine($"sent {sentBytes} bytes to {remote}");
                 }
             }
@@ -119,5 +141,24 @@ class Program
             }
         }
         while (sendForever);
+    }
+    static void PrintReplies(IReadOnlyDictionary<IPAddress, List<int>> replies, List<int> ports)
+    {
+        foreach ( var ip in replies )
+        {
+            bool receivedOnAllPorts = ip.Value.All(ports.Contains);
+
+            string result;
+            if ( receivedOnAllPorts)
+            {
+                result = "ALL ports ok";
+            }
+            else
+            {
+                string missingPorts = String.Join(',', ports.Where(p => !ip.Value.Contains(p)));
+                result = $"missing ports: {missingPorts}";
+            }
+            Console.WriteLine($"{ip.Key}\t{result}");
+        }
     }
 }
