@@ -40,19 +40,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .unwrap_or_else(|| "0.0.0.0".to_string());
 
-    let ip = str_ip.parse::<IpAddr>()?;
+    let ip = str_ip.parse()?;
 
-    let mut receive_futues = Vec::new();
-    for _ in 0..3  
+    let receive_futues = [0;3].iter()
+    .map( |_|
     {
         let sock_addr = std::net::SocketAddr::new(ip, 34000);
-        println!("spawning recv...");
-        receive_futues.push( 
-            tokio::spawn(
-                receive(sock_addr.clone())));
-    }
+        println!("spawning recv new...");
+        tokio::spawn( receive(sock_addr.clone()))
+    }).collect::<Vec<_>>();
 
-    println!("waiting for receives...");
+    println!("started {} receives. waiting...", receive_futues.len());
     futures::future::try_join_all(receive_futues).await?;
 
     Ok(())
