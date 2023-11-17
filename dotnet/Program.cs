@@ -6,8 +6,6 @@ namespace UDPProbe;
     
 class Program
 {
-    
-
     static int Main(string[] args)
     {
         var opts = Options.GetOpts(args);
@@ -29,11 +27,23 @@ class Program
 
         int receives = opts.Ports.Count * receivesPerPort;
         CountdownEvent allReceivesListening = new CountdownEvent(receives);
-
         var replies = new ConcurrentDictionary<IPAddress, List<int>>();
 
+        CancellationTokenSource cts = new CancellationTokenSource();
+
+        /*
+        Console.CancelKeyPress += (sender, args) =>
+        {
+            args.Cancel = true;
+            cts.Cancel();
+        };
+        */
+
+        Task.Run(() => HandleQuit(cts));
+
         var receiveTasks = SetupReceives(
-              allReceivesListening
+              cts.Token
+            , allReceivesListening
             , opts.Ports
             , echoReply:  opts.IPs.Count == 0
             , runForever
@@ -43,10 +53,11 @@ class Program
         if ( ! allReceivesListening.Wait(millisecondsTimeout: 3000) )
         {
             Console.Error.WriteLine("could not setup listening on all ports");
+            return 8;
         }
         else
         {
-            Console.WriteLine("setup listening on all given ports");
+            Console.WriteLine("listening on all given ports (press q to quit)");
         }
 
         if ( opts.IPs.Count > 0)
@@ -54,22 +65,28 @@ class Program
             Send(opts.IPs, opts.Ports, opts.SendForever);
         }
         
-        Task.WaitAll(receiveTasks);
+        try
+        {
+            Task.WaitAll(receiveTasks, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
 
         PrintReplies(replies, opts.Ports);
 
         return 0;
     }
-    public static Task[] SetupReceives(CountdownEvent cde, List<int> ports, bool echoReply, bool runForever, int receivesPerPort, ConcurrentDictionary<IPAddress, List<int>> replies)
+    public static Task[] SetupReceives(CancellationToken ct, CountdownEvent cde, List<int> ports, bool echoReply, bool runForever, int receivesPerPort, ConcurrentDictionary<IPAddress, List<int>> replies)
     {
         return 
             ports.SelectMany( port =>
                 Enumerable
                     .Repeat(port, receivesPerPort)
-                    .Select(p => Receive(cde, p, echoReply, runForever, replies))
+                    .Select(p => Receive(ct, cde, p, echoReply, runForever, replies))
             ).ToArray();
     }
-    public static async Task Receive(CountdownEvent cde, int port, bool echoReply, bool runForever, ConcurrentDictionary<IPAddress, List<int>> replies)
+    public static async Task Receive(CancellationToken cancelToken, CountdownEvent cde, int port, bool echoReply, bool runForever, ConcurrentDictionary<IPAddress, List<int>> replies)
     {
         try
         {
@@ -79,8 +96,8 @@ class Program
             //
             udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             udpClient.Client.Bind(new IPEndPoint( IPAddress.Any, port));
-            var receiveTask =  udpClient.ReceiveAsync().ConfigureAwait(false);
-            Console.WriteLine($"listening on port {port}");
+            var receiveTask =  udpClient.ReceiveAsync(cancelToken).ConfigureAwait(false);
+            //Console.WriteLine($"listening on port {port}");
             cde.Signal();
 
             for (;;)
@@ -105,7 +122,7 @@ class Program
 
                 if (runForever)
                 {
-                    receiveTask = udpClient.ReceiveAsync().ConfigureAwait(false);
+                    receiveTask = udpClient.ReceiveAsync(cancelToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -113,9 +130,12 @@ class Program
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception ex)
         {
-            Console.WriteLine(ex);
+            Console.Error.WriteLine($"X: listen on port {port} got exception {ex.Message}");
             return;
         }
     }
@@ -144,21 +164,41 @@ class Program
     }
     static void PrintReplies(IReadOnlyDictionary<IPAddress, List<int>> replies, List<int> ports)
     {
-        foreach ( var ip in replies )
+        if (replies.Count == 0)
         {
-            bool receivedOnAllPorts = ip.Value.All(ports.Contains);
+            Console.WriteLine("no replies received");
+        }
+        else
+        {
+            foreach ( var ip in replies )
+            {
+                bool receivedOnAllPorts = ports.All( ip.Value.Contains );
 
-            string result;
-            if ( receivedOnAllPorts)
-            {
-                result = "ALL ports ok";
+                string result;
+                if ( receivedOnAllPorts)
+                {
+                    result = "ALL ports ok";
+                }
+                else
+                {
+                    string missingPorts = String.Join(',', ports.Where(p => !ip.Value.Contains(p)));
+                    result = $"missing ports: {missingPorts}";
+                }
+                Console.WriteLine($"{ip.Key}\t{result}");
             }
-            else
-            {
-                string missingPorts = String.Join(',', ports.Where(p => !ip.Value.Contains(p)));
-                result = $"missing ports: {missingPorts}";
-            }
-            Console.WriteLine($"{ip.Key}\t{result}");
         }
     }
+    static void HandleQuit(CancellationTokenSource cancelSource)
+        {
+            while (!cancelSource.IsCancellationRequested)
+            {
+                var key = Console.ReadKey(intercept: true);
+                switch (key.KeyChar)
+                {
+                    case 'q': 
+                        cancelSource.Cancel(); 
+                        break;
+                }
+            }
+        }
 }

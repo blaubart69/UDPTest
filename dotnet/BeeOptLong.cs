@@ -33,6 +33,9 @@ namespace Spi
         public static void PrintOptions(IEnumerable<BeeOpts> opts)
         {
             /*
+            * SAMPLE:
+            * -------
+            *
             * Options:
              -b, --basedir=VALUE        appends this basedir to all filenames in the file
              -n, --dryrun               show what would be deleted
