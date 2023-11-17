@@ -90,30 +90,35 @@ class Program
     {
         try
         {
-            using var udpClient = new System.Net.Sockets.UdpClient();
+            //using var udpClient = new System.Net.Sockets.UdpClient();
+            using var socket = new System.Net.Sockets.Socket(SocketType.Dgram, ProtocolType.Udp);
             //
             // ReuseAddress AND Bind() are important to have multiple Receives() in flight
             //
-            udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            udpClient.Client.Bind(new IPEndPoint( IPAddress.Any, port));
-            var receiveTask =  udpClient.ReceiveAsync(cancelToken).ConfigureAwait(false);
-            //Console.WriteLine($"listening on port {port}");
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            socket.Bind(new IPEndPoint( IPAddress.Any, port));
+
+            var bufArray = new byte[512];
+            var buf = new ArraySegment<byte>(bufArray);
+            var remoteEndpoint = new IPEndPoint(IPAddress.Any, 0);
+            var receiveFromTask = socket.ReceiveMessageFromAsync(buf, remoteEndpoint, cancelToken).ConfigureAwait(false);
+
             cde.Signal();
 
             for (;;)
             {
-                var receiveResult = await receiveTask;
-                string recvMsg = $"received from {receiveResult.RemoteEndPoint}";
+                var receiveResult = await receiveFromTask;
+                string recvMsg = $"received from {receiveResult.RemoteEndPoint} on address/interface {receiveResult.PacketInformation.Address}/{receiveResult.PacketInformation.Interface}";
                 replies.AddOrUpdate(
-                      key: receiveResult.RemoteEndPoint.Address
+                      key: ((IPEndPoint)receiveResult.RemoteEndPoint).Address
                     , addValue: new List<int>() { port }
                     , updateValueFactory: (ip, ports) => { ports.Add(port); return ports; } );
 
                 if (echoReply)
                 {
-                    var returnAddress = new IPEndPoint(receiveResult.RemoteEndPoint.Address, port);
-                    int bytesSent = udpClient.Send(receiveResult.Buffer, receiveResult.Buffer.Length, returnAddress);
-                    Console.WriteLine($"{recvMsg}. sent back to {returnAddress}");
+                    var sendToEndpoint = new IPEndPoint( ((IPEndPoint)receiveResult.RemoteEndPoint).Address, port);
+                    int bytesSent = socket.SendTo(bufArray, size: receiveResult.ReceivedBytes, SocketFlags.None, sendToEndpoint);
+                    Console.WriteLine($"{recvMsg}. sent back to {sendToEndpoint}");
                 }
                 else
                 {
@@ -122,7 +127,7 @@ class Program
 
                 if (runForever)
                 {
-                    receiveTask = udpClient.ReceiveAsync(cancelToken).ConfigureAwait(false);
+                    receiveFromTask = socket.ReceiveMessageFromAsync(buf, remoteEndpoint, cancelToken).ConfigureAwait(false);
                 }
                 else
                 {
