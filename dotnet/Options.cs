@@ -33,20 +33,26 @@ class Options {
             return null;
         }
 
-        var opts = new Opts()
+        try
         {
-            Ports = ParsePorts(ports),
-            IPs   = ParseIPs(arguments),
-            SendForever = sendForever
-        };
-
-        return opts;
+            return new Opts()
+            {
+                Ports = ParsePorts(ports),
+                IPs   = ParseIPs(arguments),
+                SendForever = sendForever
+            };
+        }
+        catch ( ApplicationException ax)
+        {
+            Console.Error.WriteLine(ax.Message);
+            return null;
+        }
     }
     static List<int> ParsePorts(string? CsvPorts)
     {
         if ( String.IsNullOrEmpty(CsvPorts) ) 
         {
-            throw new Exception("specify at least one port");
+            throw new ApplicationException("specify at least one port");
         }
         else
         {

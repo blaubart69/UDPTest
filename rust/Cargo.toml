@@ -8,5 +8,5 @@ edition = "2021"
 [dependencies]
 #tokio = { version = "1", features = ["net","rt-multi-thread","macros"] }
 tokio = { version = "1", features = ["full"] }
-futures = { version = "0.3" }#
+futures = { version = "0.3" }
 socket2 = "0.5"

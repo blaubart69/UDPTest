@@ -1,9 +1,6 @@
 use std::error::Error;
-use std::net::{SocketAddr, IpAddr};
-use std::sync::Arc;
+use std::net::{SocketAddr};
 use std::{env,io};
-
-use tokio::net::UdpSocket;
 
 
 //
@@ -19,7 +16,10 @@ async fn receive(addr: SocketAddr) -> Result<(), io::Error> {
         // use socket2 library to set the socketoptions without the use for unsafe
         let s2 = socket2::Socket::new(socket2::Domain::for_address(addr), socket2::Type::DGRAM, None)?;
         s2.set_reuse_address(true)?;
+        
+        #[cfg(target_family = "unix")]
         s2.set_reuse_port(true)?;
+        
         s2.bind(&addr.into())?;     // bind() have to be AFTER REUSE!!!
         s2.into()
     })?;
